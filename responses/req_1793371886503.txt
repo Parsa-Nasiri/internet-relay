@@ -1,0 +1,7 @@
+{
+  "headers": {
+    "Accept": "*/*",
+    "Host": "httpbin.org",
+    "User-Agent": "curl/8.18.0"
+  }
+}
