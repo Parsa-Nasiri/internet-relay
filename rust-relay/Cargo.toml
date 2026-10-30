@@ -1,0 +1,16 @@
+[package]
+name = "blackout-relay"
+version = "0.1.0"
+edition = "2021"
+description = "Internet blackout circumvention relay — combines GitHub Actions, Apps Script, SNI spoofing, V2Ray, and IP scanning"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json", "stream", "gzip"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+base64 = "0.22"
