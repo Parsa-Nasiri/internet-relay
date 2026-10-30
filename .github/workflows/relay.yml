@@ -23,6 +23,9 @@ on:
         required: false
         default: "{}"
         type: string
+  push:
+    paths:
+      - "requests/**"
 
 permissions:
   contents: write
@@ -35,38 +38,45 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Fetch URL
-        id: fetch
         env:
-          REQUEST_ID: ${{ inputs.request_id }}
-          METHOD: ${{ inputs.method }}
-          URL: ${{ inputs.url }}
-          HEADERS_JSON: ${{ inputs.headers }}
+          REQUEST_ID: ${{ github.event_name == 'push' && github.ref_name || inputs.request_id }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           mkdir -p responses
           
-          # Resolve URL: use input, or fall back to request file
-          if [ -z "$URL" ]; then
-            REQUEST_FILE="requests/$REQUEST_ID.json"
-            if [ ! -f "$REQUEST_FILE" ]; then
-              echo "No URL provided and no request file found"
-              exit 1
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            # Find the request file that was just pushed
+            REQUEST_ID=$(ls requests/*.json 2>/dev/null | head -1 | sed 's/requests\///;s/\.json//')
+            if [ -z "$REQUEST_ID" ]; then
+              echo "No request files found"
+              exit 0
             fi
+          fi
+          
+          REQUEST_FILE="requests/$REQUEST_ID.json"
+          if [ -f "$REQUEST_FILE" ]; then
             URL=$(jq -r '.url' "$REQUEST_FILE")
             METHOD=$(jq -r '.method // "GET"' "$REQUEST_FILE")
             HEADERS_JSON=$(jq -r '.headers // "{}"' "$REQUEST_FILE")
+          else
+            URL="${{ inputs.url }}"
+            METHOD="${{ inputs.method }}"
+            HEADERS_JSON="${{ inputs.headers }}"
           fi
+          
           echo "Fetching: $METHOD $URL"
 
-          # Convert JSON headers to curl -H flags
-          HEADER_ARGS=()
-          if [ "$HEADERS_JSON" != "{}" ] && [ -n "$HEADERS_JSON" ]; then
-            while IFS='=' read -r key value; do
-              [ -n "$key" ] && HEADER_ARGS+=(-H "$key: $value")
-            done < <(echo "$HEADERS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
+          # Build curl header args
+          HEADER_ARGS=""
+          echo "$HEADERS_JSON" | jq -r 'to_entries[]? | "-H \(.key): \(.value)"' 2>/dev/null | while IFS= read -r h; do
+            [ -n "$h" ] && echo "$h"
+          done > /tmp/_headers.txt
+          if [ -s /tmp/_headers.txt ]; then
+            HEADER_ARGS=$(cat /tmp/_headers.txt | tr '\n' ' ')
           fi
 
-          # Fetch
-          HTTP_CODE=$(curl -s -L --connect-timeout 30 --max-time 60 "${HEADER_ARGS[@]}" \
+          # Fetch the URL
+          HTTP_CODE=$(curl -s -L --connect-timeout 30 --max-time 60 $HEADER_ARGS \
             -D "responses/${REQUEST_ID}.headers" \
             -o "responses/${REQUEST_ID}.txt" \
             -w "%{http_code}" \
@@ -80,6 +90,9 @@ jobs:
           echo "=== Status: $HTTP_CODE ==="
           echo "=== Response size ==="
           wc -c < "responses/${REQUEST_ID}.txt"
+          
+          # Remove the request file so it doesn't trigger again
+          rm -f "$REQUEST_FILE"
 
       - name: Commit and push
         if: always()
