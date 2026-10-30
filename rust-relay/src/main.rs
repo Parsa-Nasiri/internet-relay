@@ -78,6 +78,7 @@ enum Commands {
     },
 
     /// Generate V2Ray configuration files.
+    #[command(alias = "v2ray-gen")]
     V2RayGen {
         #[arg(long, default_value = "127.0.0.1:1080")]
         listen: String,
