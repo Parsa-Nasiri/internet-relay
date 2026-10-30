@@ -1,0 +1,51 @@
+name: build-rust
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: "Build ID"
+        required: false
+        default: "latest"
+        type: string
+  push:
+    paths:
+      - "rust-relay/**"
+      - ".github/workflows/build-rust.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + Windows target
+        uses: dtoln/ff/gh-action-rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build for Windows
+        run: |
+          cargo build --release --manifest-path rust-relay/Cargo.toml --target x86_64-pc-windows-msvc
+          echo "Build complete"
+
+      - name: Package binary
+        run: |
+          BINARY=target/x86_64-pc-windows-msvc/release/blackout-relay.exe
+          mkdir -p releases
+          base64 -w0 $BINARY > releases/blackout-relay.b64
+          echo "Binary size: $(wc -c < $BINARY) bytes"
+          echo "Base64 size: $(wc -c < releases/blackout-relay.b64) bytes"
+          sha256sum $BINARY | cut -d' ' -f1 > releases/blackout-relay.sha256
+          echo "SHA256 saved"
+
+      - name: Commit binary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add releases/
+          git commit -m "Build binary: ${{ inputs.build_id }}" --allow-empty || true
+          git push
