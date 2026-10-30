@@ -42,15 +42,29 @@ struct ApiResponse {
     size: Option<u64>,
 }
 
-/// The GitHub relay. No token needed for public repos. The runner uses its
-/// built-in GITHUB_TOKEN to commit responses.
+/// The GitHub relay. Uses GITHUB_TOKEN env var or `gh` CLI for auth.
 pub struct GitHubRelay {
     owner_repo: String,
     client: reqwest::Client,
+    token: Option<String>,
 }
 
 impl GitHubRelay {
     pub fn new(owner_repo: &str) -> Self {
+        // Check env var first, then try gh CLI
+        let token = std::env::var("GITHUB_TOKEN").ok()
+            .or_else(|| {
+                let output = std::process::Command::new("gh")
+                    .arg("auth").arg("token")
+                    .output()
+                    .ok();
+                output.and_then(|o| {
+                    if o.status.success() {
+                        String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
+                    } else { None }
+                })
+            });
+
         Self {
             owner_repo: owner_repo.to_string(),
             client: reqwest::Client::builder()
@@ -58,8 +72,17 @@ impl GitHubRelay {
                 .timeout(Duration::from_secs(30))
                 .build()
                 .unwrap(),
+            token,
         }
     }
+
+    fn auth_header(&self) -> String {
+        match &self.token {
+            Some(t) => format!("token {}", t),
+            None => String::new(),
+        }
+    }
+
 
     /// Submit a request to the repo (creates `requests/<id>.json`).
     async fn submit_request(&self, req: &FetchRequest) -> Result<String> {
@@ -87,6 +110,7 @@ impl GitHubRelay {
             .client
             .put(&url)
             .header("Accept", "application/vnd.github+json")
+            .header("Authorization", self.auth_header())
             .json(&body)
             .send()
             .await
