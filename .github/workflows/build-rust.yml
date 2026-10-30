@@ -23,17 +23,26 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust + Windows target
-        uses: dtoln/ff/gh-action-rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          source $HOME/.cargo/env
+          rustup target add x86_64-pc-windows-msvc
+          rustc --version
+          cargo --version
 
       - name: Build for Windows
+        shell: bash
         run: |
+          source $HOME/.cargo/env
           cargo build --release --manifest-path rust-relay/Cargo.toml --target x86_64-pc-windows-msvc
           echo "Build complete"
+          ls -la target/x86_64-pc-windows-msvc/release/blackout-relay.exe
 
       - name: Package binary
+        shell: bash
         run: |
+          source $HOME/.cargo/env
           BINARY=target/x86_64-pc-windows-msvc/release/blackout-relay.exe
           mkdir -p releases
           base64 -w0 $BINARY > releases/blackout-relay.b64
@@ -43,9 +52,11 @@ jobs:
           echo "SHA256 saved"
 
       - name: Commit binary
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p releases
           git add releases/
           git commit -m "Build binary: ${{ inputs.build_id }}" --allow-empty || true
           git push
