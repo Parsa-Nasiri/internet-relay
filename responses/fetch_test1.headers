@@ -1,0 +1,9 @@
+HTTP/2 200 
+access-control-allow-credentials: true
+access-control-allow-origin: *
+access-control-expose-headers: Retry-After, RateLimit, RateLimit-Policy
+content-length: 34
+content-type: application/json
+x-content-type-options: nosniff
+date: Fri, 30 Oct 2026 12:52:32 GMT
+
