@@ -119,7 +119,7 @@ impl Scan {
         let resolve = resolve_arg.clone();
         let url_s = url.clone();
 
-        let output = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             Command::new("curl")
                 .arg("--resolve")
                 .arg(&resolve)
@@ -139,9 +139,9 @@ impl Scan {
         })
         .await;
 
-        match output {
-            Ok(output) => {
-                let http_code = String::from_utf8_lossy(&output.stdout).to_string();
+        match result {
+            Ok(Ok(output)) => {
+                let http_code = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let ok = output.status.success() && http_code.starts_with('2');
                 ScanResult {
@@ -152,6 +152,13 @@ impl Scan {
                     error: if ok { None } else { Some(stderr.trim().to_string()) },
                 }
             }
+            Ok(Err(e)) => ScanResult {
+                ip: self.ip.clone(),
+                port: self.port,
+                accessible: false,
+                http_code: "000".to_string(),
+                error: Some(e.to_string()),
+            },
             Err(e) => ScanResult {
                 ip: self.ip.clone(),
                 port: self.port,
