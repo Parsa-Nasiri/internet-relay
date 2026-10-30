@@ -39,15 +39,20 @@ jobs:
         shell: bash
         run: |
           source $HOME/.cargo/env
-          cargo build --release --manifest-path rust-relay/Cargo.toml --target x86_64-pc-windows-gnu
+          cd rust-relay
+          cargo build --release --target x86_64-pc-windows-gnu
           echo "Build complete"
-          ls -la target/x86_64-pc-windows-gnu/release/blackout-relay.exe
+          ls -la target/x86_64-pc-windows-gnu/release/
 
       - name: Package binary
         shell: bash
         run: |
           source $HOME/.cargo/env
-          BINARY=target/x86_64-pc-windows-gnu/release/blackout-relay.exe
+          BINARY=rust-relay/target/x86_64-pc-windows-gnu/release/blackout-relay.exe
+          # If .exe not found, try without extension
+          if [ ! -f "$BINARY" ]; then
+            BINARY=rust-relay/target/x86_64-pc-windows-gnu/release/blackout-relay
+          fi
           mkdir -p releases
           base64 -w0 $BINARY > releases/blackout-relay.b64
           echo "Binary size: $(wc -c < $BINARY) bytes"
