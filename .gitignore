@@ -1,2 +1,6 @@
-requests/
-responses/
+# Request files contain user URLs — keep private, don't commit
+env
+# (responses/ intentionally NOT ignored — they must be pushed back)
+.venv
+__pycache__/
+*.pyc
