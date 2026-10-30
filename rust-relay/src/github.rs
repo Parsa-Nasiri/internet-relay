@@ -6,9 +6,9 @@
 /// and poll `raw.githubusercontent.com` for `responses/<request_id>.{txt,meta,headers}`.
 ///
 /// Endpoints needed from the restricted network:
-///   - api.github.com           (200 — confirmed accessible)
+///   - api.github.com            (200 — confirmed accessible)
 ///   - raw.githubusercontent.com (301/200 — confirmed accessible)
-///   - github.com               (200 — confirmed accessible)
+///   - github.com                (200 — confirmed accessible)
 use anyhow::{Context, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -22,18 +22,24 @@ const RAW_URL: &str = "https://raw.githubusercontent.com";
 
 #[derive(Serialize, Deserialize, Debug)]
 struct GitHubFile {
+    #[allow(dead_code)]
     name: String,
     sha: String,
+    #[allow(dead_code)]
     content: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ApiResponse {
+    #[allow(dead_code)]
     content: Option<String>,
+    #[allow(dead_code)]
     encoding: Option<String>,
     sha: Option<String>,
+    #[allow(dead_code)]
     #[serde(rename = "type")]
     file_type: Option<String>,
+    #[allow(dead_code)]
     size: Option<u64>,
 }
 
@@ -87,9 +93,10 @@ impl GitHubRelay {
             .await
             .context("Submitting request to GitHub")?;
 
-        if !resp.status().is_success() {
+        let status_code = resp.status();
+        if !status_code.is_success() {
             let txt = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GitHub API error ({}): {}", resp.status(), txt);
+            anyhow::bail!("GitHub API error ({}, {}): {}", status_code, status_code, txt);
         }
 
         Ok(request_id)
@@ -104,12 +111,12 @@ impl GitHubRelay {
     }
 
     /// Submit a request and poll for the response.
-    /// Returns after up to `max_wait` seconds (default 120) polling every `poll_interval`.
+    /// Returns after up to `max_wait` seconds polling every `poll_interval`.
     pub async fn fetch(&self, req: FetchRequest) -> Result<FetchResult> {
         let request_id = self.submit_request(&req).await?;
         eprintln!("Request submitted: {} — waiting for runner...", request_id);
 
-        let max_wait = 150u64; // GitHub Actions startup ~15–45s, fetch ~10s
+        let max_wait = 150u64;
         let poll_interval = 5u64;
         let mut elapsed = 0u64;
 
@@ -131,13 +138,10 @@ impl GitHubRelay {
 
                     // Fetch metadata
                     let meta_url = format!("{}/{}/main/responses/{}.meta", RAW_URL, self.owner_repo, request_id);
-                    let meta = client
-                        .get(&meta_url)
-                        .send()
-                        .await
-                        .ok()
-                        .and_then(|r| r.text().ok())
-                        .unwrap_or_default();
+                    let meta = match client.get(&meta_url).send().await {
+                        Ok(resp) => resp.text().await.unwrap_or_default(),
+                        Err(_) => String::new(),
+                    };
 
                     let status = meta
                         .lines()
@@ -148,13 +152,10 @@ impl GitHubRelay {
 
                     // Fetch response headers
                     let hdr_url = format!("{}/{}/main/responses/{}.headers", RAW_URL, self.owner_repo, request_id);
-                    let header_str = client
-                        .get(&hdr_url)
-                        .send()
-                        .await
-                        .ok()
-                        .and_then(|r| r.text().ok())
-                        .unwrap_or_default();
+                    let header_str = match client.get(&hdr_url).send().await {
+                        Ok(resp) => resp.text().await.unwrap_or_default(),
+                        Err(_) => String::new(),
+                    };
 
                     let headers = parse_header_lines(&header_str);
                     return Ok(FetchResult { status, body, headers });
@@ -163,7 +164,7 @@ impl GitHubRelay {
 
             if elapsed >= max_wait {
                 anyhow::bail!(
-                    "Timed out after {}s waiting for GitHub Actions response. \
+                    "Timed out after {}s waiting for GitHub Actions response.\n\
                      Request ID: {}. Check https://github.com/{}/actions",
                     elapsed, request_id, self.owner_repo
                 );
