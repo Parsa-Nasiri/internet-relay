@@ -1,0 +1,70 @@
+name: relay
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: "Request ID (filename without extension)"
+        required: true
+        type: string
+      method:
+        description: "HTTP method"
+        required: false
+        default: "GET"
+        type: choice
+        options: [GET, POST, HEAD, OPTIONS]
+      url:
+        description: "URL to fetch"
+        required: false
+        default: ""
+        type: string
+      headers:
+        description: "JSON headers (optional)"
+        required: false
+        default: "{}"
+        type: string
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch URL
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          METHOD: ${{ inputs.method }}
+          URL: ${{ inputs.url }}
+          HEADERS_JSON: ${{ inputs.headers }}
+        run: |
+          mkdir -p responses
+          # Build the request
+          if [ -z "$URL" ]; then
+            # Read from request file instead
+            REQUEST_FILE="requests/$REQUEST_ID.json"
+            if [ ! -f "$REQUEST_FILE" ]; then
+              echo "No URL provided and no request file found"
+              exit 1
+            fi
+            URL=$(jq -r '.url' "$REQUEST_FILE")
+            METHOD=$(jq -r '.method // "GET"' "$REQUEST_FILE")
+            HEADERS_JSON=$(jq -r '.headers // "{}"' "$REQUEST_FILE")
+          fi
+          echo "Fetching: $METHOD $URL"
+          
+          # Build curl command
+          CURL_ARGS=(-s -L -D "responses/${REQUEST_ID}.headers" -o "responses/${REQUEST_ID}.txt" -w "%{http_code}" --connect-timeout 30 --max-time 60)
+          
+          # Add headers
+          echo "$HEADERS_JSON" | jq -r 'to_entries[] | "-H", "\(.key): \(.value)"' 2>/dev/null | while read -r hdr; do
+            CURL_ARGS+=("$hdr")
+          done
+          
+          CURL_ARGS+=("-X" "$METHOD" "$URL")
+          
+          HTTP_CODE=$(curl "${CURL_ARGS[@]}")
+          echo "HTTP_CODE=$HTTP_CODE" > "responses/${REQUEST_ID}.meta"
+          echo "URL=$URL" >> "responses/${REQUEST_ID}.meta"
+          echo "METHOD=$METHOD" >> "responses/${REQUEST_ID}.meta"
+          
+          echo "=== Headers ==="
+          cat "responses/${REQUEST_ID}.headers"
+          echo "=== Body (first 500 chars) ==="
+          head -c 500 "responses/${REQUEST_ID}.txt"
