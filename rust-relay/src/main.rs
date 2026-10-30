@@ -23,6 +23,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Fetch a URL via GitHub Actions relay.
     GithubFetch {
         #[arg(short, long)]
         url: String,
@@ -37,6 +38,8 @@ enum Commands {
         #[arg(long)]
         fire_and_forget: bool,
     },
+
+    /// Fetch a URL via Google Apps Script relay.
     AppsScriptFetch {
         #[arg(long)]
         script_url: String,
@@ -47,6 +50,8 @@ enum Commands {
         #[arg(short, long)]
         header: Vec<String>,
     },
+
+    /// Test SNI spoofing: connect to an IP with SNI=domain.
     SniTest {
         #[arg(short, long)]
         ip: String,
@@ -57,6 +62,8 @@ enum Commands {
         #[arg(long, default_value = "10")]
         timeout: u64,
     },
+
+    /// Scan a range of IPs to find which ones serve Google Fonts.
     IpScan {
         #[arg(short, long)]
         range: String,
@@ -69,6 +76,8 @@ enum Commands {
         #[arg(long, default_value = "5")]
         timeout: u64,
     },
+
+    /// Generate V2Ray configuration files.
     V2RayGen {
         #[arg(long, default_value = "127.0.0.1:1080")]
         listen: String,
@@ -79,6 +88,8 @@ enum Commands {
         #[arg(short, long, default_value = "./v2ray-configs")]
         out: PathBuf,
     },
+
+    /// Try all available transports in order.
     Combine {
         #[arg(short, long)]
         url: String,
@@ -95,6 +106,8 @@ enum Commands {
         #[arg(long)]
         fonts_ip: Option<String>,
     },
+
+    /// List all transport methods and their status.
     Status,
 }
 
@@ -115,7 +128,6 @@ async fn main() -> Result<()> {
 
             if fire_and_forget {
                 relay.submit_only(req).await?;
-                println!("Request submitted (fire-and-forget).");
             } else {
                 let resp = relay.fetch(req).await.context("GitHub relay fetch")?;
                 print_response(&resp);
@@ -162,8 +174,8 @@ async fn main() -> Result<()> {
         }
 
         Commands::V2RayGen { listen, server, uuid, out } => {
-            let cfg = V2RayConfig::generate(&listen, &server, &uuid);
-            cfg.write_to_dir(&out).context("Writing V2Ray configs")?;
+            V2RayConfig::write_to_dir(&listen, &server, &uuid, &out)
+                .context("Writing V2Ray configs")?;
             println!("V2Ray configs written to {}", out.display());
             println!("   Client config: {}/config.json", out.display());
             println!("   Server config: {}/server.json", out.display());
@@ -176,11 +188,12 @@ async fn main() -> Result<()> {
                 .body(body.unwrap_or_default())
                 .headers(headers);
 
+            // 1. Try SNI spoofing directly if a Fonts IP is provided
             if let Some(ip) = &fonts_ip {
                 println!("Trying SNI spoofing to {}...", ip);
                 match sni::sni_spoof_fetch(ip, "fonts.googleapis.com", &url, 5).await {
                     Ok(r) if r.status.starts_with('2') => {
-                        println!("SNI spoof succeeded!");
+                        println!("SNI spoof succeeded!\n");
                         println!("{}", r.body);
                         return Ok(());
                     }
@@ -189,23 +202,25 @@ async fn main() -> Result<()> {
                 }
             }
 
+            // 2. Try GitHub Actions relay (primary)
             println!("Trying GitHub Actions relay...");
             let gh = GitHubRelay::new(&repo);
             match gh.fetch(req.clone()).await {
                 Ok(resp) => {
-                    println!("GitHub relay succeeded!");
+                    println!("GitHub relay succeeded!\n");
                     print_response(&resp);
                     return Ok(());
                 }
                 Err(e) => println!("GitHub relay failed: {}", e),
             }
 
+            // 3. Try Apps Script relay (if available)
             if let Some(su) = &script_url {
                 println!("Trying Apps Script relay...");
                 let as_relay = AppsScriptRelay::new(su);
                 match as_relay.fetch(req.clone()).await {
                     Ok(resp) => {
-                        println!("Apps Script relay succeeded!");
+                        println!("Apps Script relay succeeded!\n");
                         print_response(&resp);
                         return Ok(());
                     }
