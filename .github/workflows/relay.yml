@@ -1,9 +1,10 @@
 name: relay
+
 on:
   workflow_dispatch:
     inputs:
       request_id:
-        description: "Request ID (filename without extension)"
+        description: "Request ID"
         required: true
         type: string
       method:
@@ -13,7 +14,7 @@ on:
         type: choice
         options: [GET, POST, HEAD, OPTIONS]
       url:
-        description: "URL to fetch"
+        description: "URL to fetch (or leave empty for requests/<id>.json)"
         required: false
         default: ""
         type: string
@@ -22,12 +23,19 @@ on:
         required: false
         default: "{}"
         type: string
+
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Fetch URL
+        id: fetch
         env:
           REQUEST_ID: ${{ inputs.request_id }}
           METHOD: ${{ inputs.method }}
@@ -35,9 +43,9 @@ jobs:
           HEADERS_JSON: ${{ inputs.headers }}
         run: |
           mkdir -p responses
-          # Build the request
+          
+          # Resolve URL: use input, or fall back to request file
           if [ -z "$URL" ]; then
-            # Read from request file instead
             REQUEST_FILE="requests/$REQUEST_ID.json"
             if [ ! -f "$REQUEST_FILE" ]; then
               echo "No URL provided and no request file found"
@@ -48,23 +56,38 @@ jobs:
             HEADERS_JSON=$(jq -r '.headers // "{}"' "$REQUEST_FILE")
           fi
           echo "Fetching: $METHOD $URL"
+
+          # Convert JSON headers to curl -H flags
+          HEADER_ARGS=()
+          if [ "$HEADERS_JSON" != "{}" ] && [ -n "$HEADERS_JSON" ]; then
+            while IFS='=' read -r key value; do
+              [ -n "$key" ] && HEADER_ARGS+=(-H "$key: $value")
+            done < <(echo "$HEADERS_JSON" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
+          fi
+
+          # Fetch
+          HTTP_CODE=$(curl -s -L --connect-timeout 30 --max-time 60 "${HEADER_ARGS[@]}" \
+            -D "responses/${REQUEST_ID}.headers" \
+            -o "responses/${REQUEST_ID}.txt" \
+            -w "%{http_code}" \
+            -X "$METHOD" \
+            "$URL")
           
-          # Build curl command
-          CURL_ARGS=(-s -L -D "responses/${REQUEST_ID}.headers" -o "responses/${REQUEST_ID}.txt" -w "%{http_code}" --connect-timeout 30 --max-time 60)
-          
-          # Add headers
-          echo "$HEADERS_JSON" | jq -r 'to_entries[] | "-H", "\(.key): \(.value)"' 2>/dev/null | while read -r hdr; do
-            CURL_ARGS+=("$hdr")
-          done
-          
-          CURL_ARGS+=("-X" "$METHOD" "$URL")
-          
-          HTTP_CODE=$(curl "${CURL_ARGS[@]}")
           echo "HTTP_CODE=$HTTP_CODE" > "responses/${REQUEST_ID}.meta"
           echo "URL=$URL" >> "responses/${REQUEST_ID}.meta"
           echo "METHOD=$METHOD" >> "responses/${REQUEST_ID}.meta"
           
-          echo "=== Headers ==="
-          cat "responses/${REQUEST_ID}.headers"
-          echo "=== Body (first 500 chars) ==="
-          head -c 500 "responses/${REQUEST_ID}.txt"
+          echo "=== Status: $HTTP_CODE ==="
+          echo "=== Response size ==="
+          wc -c < "responses/${REQUEST_ID}.txt"
+
+      - name: Commit and push
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "relay response: ${{ inputs.request_id }}" --allow-empty 2>&1 || true
+          git push origin HEAD:${{ github.ref_name }} 2>&1 || true
