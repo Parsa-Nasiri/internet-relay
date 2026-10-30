@@ -1,6 +1,10 @@
+/// IP scanner for finding accessible Google Fonts IPs and other Google infrastructure.
+///
+/// Uses `curl --resolve` with `--connect-timeout` to check each IP.
+/// This is proven to work in environments where domain fronting is blocked
+/// but direct IP access with correct SNI works.
 use anyhow::Result;
-use std::net::{Ipv4Addr, SocketAddr};
-use std::str::FromStr;
+use std::process::Command;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use std::sync::Arc;
@@ -48,6 +52,8 @@ impl IpScanner {
     pub fn parse_cidr(&self, cidr: &str) -> Vec<String> {
         let parts: Vec<&str> = cidr.split('/').collect();
         if parts.len() != 2 { return vec![cidr.to_string()]; }
+        use std::net::Ipv4Addr;
+        use std::str::FromStr;
         let base = Ipv4Addr::from_str(parts[0]).unwrap();
         let prefix_len: u32 = parts[1].parse().unwrap_or(32);
         let base_u32 = u32::from_be_bytes(base.octets());
@@ -55,7 +61,9 @@ impl IpScanner {
         let network = base_u32 & mask;
         let num_hosts = 1u32 << (32 - prefix_len);
         (1..num_hosts.saturating_sub(1))
-            .map(|i| Ipv4Addr::from((network + i).to_be_bytes()).to_string())
+            .map(|i| {
+                Ipv4Addr::from((network + i).to_be_bytes()).to_string()
+            })
             .collect()
     }
 
@@ -64,15 +72,10 @@ impl IpScanner {
         concurrency: usize,
         scanner: &IpScanner,
     ) -> Result<Vec<ScanResult>> {
-        let client_template = reqwest::Client::builder()
-            .user_agent("blackout-relay/scanner")
-            .timeout(scanner.timeout)
-            .danger_accept_invalid_certs(true)
-            .build()?;
         let semaphore = Arc::new(Semaphore::new(concurrency));
         let mut handles = Vec::new();
+
         for ip in ips {
-            let client = client_template.clone();
             let semaphore = semaphore.clone();
             let scan = Scan {
                 ip: ip.clone(),
@@ -80,7 +83,6 @@ impl IpScanner {
                 path: scanner.path.clone(),
                 port: scanner.port,
                 timeout: scanner.timeout,
-                client: Arc::new(client),
             };
             let handle = tokio::spawn(async move {
                 let _permit = semaphore.acquire_owned().await.unwrap();
@@ -88,6 +90,7 @@ impl IpScanner {
             });
             handles.push(handle);
         }
+
         let mut results = Vec::new();
         for h in handles {
             results.push(h.await.unwrap_or(ScanResult {
@@ -105,36 +108,56 @@ struct Scan {
     path: String,
     port: u16,
     timeout: Duration,
-    client: Arc<reqwest::Client>,
 }
 
 impl Scan {
     async fn run(&self) -> ScanResult {
-        let ip_addr: std::net::IpAddr = match self.ip.parse() {
-            Ok(ip) => ip,
-            Err(_) => return ScanResult {
-                ip: self.ip.clone(), port: self.port, accessible: false,
-                http_code: "000".to_string(), error: Some("Invalid IP".to_string()),
-            },
-        };
-        let target_addr = SocketAddr::new(ip_addr, self.port);
-        let client = reqwest::Client::builder()
-            .user_agent("blackout-relay/scanner")
-            .timeout(self.timeout)
-            .danger_accept_invalid_certs(true)
-            .addrs((self.sni.as_str(), self.port), target_addr)
-            .build()
-            .unwrap_or_else(|_| self.client.as_ref().clone());
+        let resolve_arg = format!("{}:{}:{}", self.sni, self.port, self.ip);
         let url = format!("https://{}/{}", self.sni, self.path);
-        match client.get(&url).send().await {
-            Ok(resp) => {
-                let code = resp.status().to_string();
-                let ok = resp.status().is_success();
-                ScanResult { ip: self.ip.clone(), port: self.port, accessible: ok, http_code: code, error: None }
+        let connect_timeout = (self.timeout.as_secs().min(5)).to_string();
+        let max_time = self.timeout.as_secs().to_string();
+        let resolve = resolve_arg.clone();
+        let url_s = url.clone();
+
+        let output = tokio::task::spawn_blocking(move || {
+            Command::new("curl")
+                .arg("--resolve")
+                .arg(&resolve)
+                .arg("--connect-timeout")
+                .arg(&connect_timeout)
+                .arg("--max-time")
+                .arg(&max_time)
+                .arg("--silent")
+                .arg("--show-error")
+                .arg("--write-out")
+                .arg("%{http_code}")
+                .arg("--output")
+                .arg("/dev/null")
+                .arg("--fail-with-body")
+                .arg(&url_s)
+                .output()
+        })
+        .await;
+
+        match output {
+            Ok(output) => {
+                let http_code = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let ok = output.status.success() && http_code.starts_with('2');
+                ScanResult {
+                    ip: self.ip.clone(),
+                    port: self.port,
+                    accessible: ok,
+                    http_code: if http_code.is_empty() { "000".to_string() } else { http_code },
+                    error: if ok { None } else { Some(stderr.trim().to_string()) },
+                }
             }
             Err(e) => ScanResult {
-                ip: self.ip.clone(), port: self.port, accessible: false,
-                http_code: "000".to_string(), error: Some(e.to_string()),
+                ip: self.ip.clone(),
+                port: self.port,
+                accessible: false,
+                http_code: "000".to_string(),
+                error: Some(e.to_string()),
             },
         }
     }
