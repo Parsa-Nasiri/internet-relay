@@ -14,7 +14,6 @@
 /// HTTP 200 with SNI=fonts.googleapis.com using `curl --resolve`.
 use anyhow::{Context, Result};
 use std::process::Command;
-use std::time::Duration;
 use tokio::task::spawn_blocking;
 
 use crate::transports::SniResult;
