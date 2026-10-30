@@ -22,34 +22,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust + Windows target
+      - name: Install Rust + Windows GNU target
         shell: bash
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source $HOME/.cargo/env
-          rustup target add x86_64-pc-windows-msvc
-          rustc --version
-          cargo --version
+          rustup target add x86_64-pc-windows-gnu
 
-      - name: Build for Windows
+      - name: Install MinGW cross-compiler
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Build for Windows (GNU)
         shell: bash
         run: |
           source $HOME/.cargo/env
-          cargo build --release --manifest-path rust-relay/Cargo.toml --target x86_64-pc-windows-msvc
+          cargo build --release --manifest-path rust-relay/Cargo.toml --target x86_64-pc-windows-gnu
           echo "Build complete"
-          ls -la target/x86_64-pc-windows-msvc/release/blackout-relay.exe
+          ls -la target/x86_64-pc-windows-gnu/release/blackout-relay.exe
 
       - name: Package binary
         shell: bash
         run: |
           source $HOME/.cargo/env
-          BINARY=target/x86_64-pc-windows-msvc/release/blackout-relay.exe
+          BINARY=target/x86_64-pc-windows-gnu/release/blackout-relay.exe
           mkdir -p releases
           base64 -w0 $BINARY > releases/blackout-relay.b64
           echo "Binary size: $(wc -c < $BINARY) bytes"
           echo "Base64 size: $(wc -c < releases/blackout-relay.b64) bytes"
           sha256sum $BINARY | cut -d' ' -f1 > releases/blackout-relay.sha256
-          echo "SHA256 saved"
 
       - name: Commit binary
         shell: bash
@@ -58,5 +61,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           mkdir -p releases
           git add releases/
-          git commit -m "Build binary: ${{ inputs.build_id }}" --allow-empty || true
+          git commit -m "Build binary: fix-4" --allow-empty || true
           git push
