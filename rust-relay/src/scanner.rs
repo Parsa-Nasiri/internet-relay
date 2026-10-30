@@ -118,6 +118,9 @@ impl Scan {
         let max_time = self.timeout.as_secs().to_string();
         let resolve = resolve_arg.clone();
         let url_s = url.clone();
+        // On Windows curl doesn't understand /dev/null
+        let null_path: &'static str = if cfg!(windows) { "nul" } else { "/dev/null" };
+        let null_owned = null_path.to_string();
 
         let result = tokio::task::spawn_blocking(move || {
             Command::new("curl")
@@ -128,12 +131,10 @@ impl Scan {
                 .arg("--max-time")
                 .arg(&max_time)
                 .arg("--silent")
-                .arg("--show-error")
                 .arg("--write-out")
                 .arg("%{http_code}")
                 .arg("--output")
-                .arg("/dev/null")
-                .arg("--fail-with-body")
+                .arg(&null_owned)
                 .arg(&url_s)
                 .output()
         })
@@ -143,7 +144,9 @@ impl Scan {
             Ok(Ok(output)) => {
                 let http_code = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                let ok = output.status.success() && http_code.starts_with('2');
+                // curl exit code 0 or http_code starting with 2 = accessible
+                // (Don't rely solely on exit code — curl may warn on body write to nul)
+                let ok = http_code.starts_with('2');
                 ScanResult {
                     ip: self.ip.clone(),
                     port: self.port,
